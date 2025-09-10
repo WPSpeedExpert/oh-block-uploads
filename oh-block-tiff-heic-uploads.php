@@ -2,15 +2,21 @@
 /**
  * Plugin Name:       OH – Block TIFF & HEIC Uploads
  * Plugin URI:        https://github.com/WPSpeedExpert/oh-block-uploads
- * Description:       Blocks TIFF and HEIC image uploads with custom error messaging.
- * Version:           1.6.0
+ * Description:       Blocks TIFF and HEIC image uploads with custom error messaging. Must-Use plugin version.
+ * Version:           2.0.0
  * Author:            OctaHexa
  * Author URI:        https://octahexa.com
  * License:           GPL v2 or later
  * Text Domain:       oh-block-uploads
  * 
- * Filename:          oh-block-tiff-heic-uploads.php
+ * Filename:          oh-block-uploads.php
+ * Location:          /wp-content/mu-plugins/
  */
+
+// Prevent direct access
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 // Define constants
 define('OH_BLOCK_DEBUG', false); // Set to true for debugging
@@ -104,21 +110,10 @@ function oh_get_error_message($file_type) {
  * Primary filter - wp_handle_upload_prefilter
  */
 add_filter('wp_handle_upload_prefilter', function($file) {
-    oh_debug_log("wp_handle_upload_prefilter triggered for: " . $file['name']);
-    
     $blocked_type = oh_should_block_file($file['name'], $file['tmp_name']);
     if ($blocked_type) {
         $file['error'] = oh_get_error_message($blocked_type);
-        oh_debug_log("File blocked in wp_handle_upload_prefilter");
-        
-        // Force WordPress to display our error
-        add_filter('wp_die_handler', function() {
-            return function($message) {
-                wp_die($message, 'Upload Error', ['response' => 403, 'back_link' => true]);
-            };
-        });
     }
-    
     return $file;
 }, -999999);
 
@@ -126,28 +121,20 @@ add_filter('wp_handle_upload_prefilter', function($file) {
  * Block sideload
  */
 add_filter('wp_handle_sideload_prefilter', function($file) {
-    oh_debug_log("wp_handle_sideload_prefilter triggered for: " . $file['name']);
-    
     $blocked_type = oh_should_block_file($file['name'], $file['tmp_name']);
     if ($blocked_type) {
         $file['error'] = oh_get_error_message($blocked_type);
-        oh_debug_log("File blocked in wp_handle_sideload_prefilter");
     }
-    
     return $file;
 }, -999999);
 
 /**
- * File type checking - this is what triggers the server error message
+ * File type checking
  */
 add_filter('wp_check_filetype_and_ext', function($types, $file, $filename, $mimes) {
-    oh_debug_log("wp_check_filetype_and_ext triggered for: $filename");
-    
     $blocked_type = oh_should_block_file($filename, $file);
     if ($blocked_type) {
-        oh_debug_log("File blocked in wp_check_filetype_and_ext");
-        
-        // Set a transient to display error message
+        // Store error message in transient
         set_transient('oh_blocked_upload_' . get_current_user_id(), oh_get_error_message($blocked_type), 10);
         
         return [
@@ -156,22 +143,8 @@ add_filter('wp_check_filetype_and_ext', function($types, $file, $filename, $mime
             'proper_filename' => false
         ];
     }
-    
     return $types;
 }, -999999, 4);
-
-/**
- * Override the image processing error to show our message
- */
-add_filter('wp_image_editors', function($editors) {
-    // Check if we have a blocked upload transient
-    $error_message = get_transient('oh_blocked_upload_' . get_current_user_id());
-    if ($error_message) {
-        delete_transient('oh_blocked_upload_' . get_current_user_id());
-        wp_die($error_message, 'Upload Blocked', ['response' => 403, 'back_link' => true]);
-    }
-    return $editors;
-}, -999999);
 
 /**
  * Remove from allowed mimes
@@ -192,89 +165,69 @@ add_filter('upload_mimes', function($mimes) {
 }, -999999);
 
 /**
- * JavaScript injection to block on frontend with better messaging
+ * JavaScript injection to block on frontend
  */
 add_action('admin_footer', function() {
     ?>
     <script>
-    jQuery(document).ready(function($) {
-        // Override the uploader
-        if (typeof wp !== 'undefined' && wp.Uploader) {
-            var originalInit = wp.Uploader.prototype.init;
-            wp.Uploader.prototype.init = function() {
-                originalInit.apply(this, arguments);
+    if (typeof jQuery !== 'undefined') {
+        jQuery(document).ready(function($) {
+            // Override the uploader
+            if (typeof wp !== 'undefined' && wp.Uploader) {
+                var originalInit = wp.Uploader.prototype.init;
+                wp.Uploader.prototype.init = function() {
+                    originalInit.apply(this, arguments);
+                    
+                    this.uploader.bind('BeforeUpload', function(up, file) {
+                        var ext = file.name.split('.').pop().toLowerCase();
+                        var blockedTiff = ['tif', 'tiff', 'tff'];
+                        var blockedHeic = ['heic', 'heif', 'heics', 'heifs', 'hif'];
+                        
+                        if (blockedTiff.indexOf(ext) !== -1) {
+                            up.removeFile(file);
+                            alert('❌ TIFF files (.tif, .tiff) are not allowed.\n\nPlease convert to JPG or WebP format.');
+                            return false;
+                        }
+                        
+                        if (blockedHeic.indexOf(ext) !== -1) {
+                            up.removeFile(file);
+                            alert('❌ HEIC/HEIF files are not allowed.\n\nPlease convert to JPG or WebP format.');
+                            return false;
+                        }
+                    });
+                };
+            }
+            
+            // Block on file input change
+            $(document).on('change', 'input[type="file"]', function(e) {
+                var files = e.target.files;
+                var blockedTiff = ['tif', 'tiff', 'tff'];
+                var blockedHeic = ['heic', 'heif', 'heics', 'heifs', 'hif'];
                 
-                this.uploader.bind('BeforeUpload', function(up, file) {
-                    var ext = file.name.split('.').pop().toLowerCase();
-                    var blockedTiff = ['tif', 'tiff', 'tff'];
-                    var blockedHeic = ['heic', 'heif', 'heics', 'heifs', 'hif'];
+                for (var i = 0; i < files.length; i++) {
+                    var ext = files[i].name.split('.').pop().toLowerCase();
                     
                     if (blockedTiff.indexOf(ext) !== -1) {
-                        up.removeFile(file);
+                        e.target.value = '';
                         alert('❌ TIFF files (.tif, .tiff) are not allowed.\n\nPlease convert to JPG or WebP format.');
-                        console.log('[OH Block] Blocked TIFF file:', file.name);
                         return false;
                     }
                     
                     if (blockedHeic.indexOf(ext) !== -1) {
-                        up.removeFile(file);
+                        e.target.value = '';
                         alert('❌ HEIC/HEIF files are not allowed.\n\nPlease convert to JPG or WebP format.');
-                        console.log('[OH Block] Blocked HEIC file:', file.name);
                         return false;
                     }
-                });
-                
-                // Override error messages
-                this.uploader.bind('Error', function(up, error) {
-                    if (error.message && error.message.includes('server cannot process')) {
-                        error.message = '❌ This file type is not allowed. TIFF and HEIC files must be converted to JPG or WebP format.';
-                    }
-                });
-            };
-        }
-        
-        // Block on file input change
-        $(document).on('change', 'input[type="file"]', function(e) {
-            var files = e.target.files;
-            var blockedTiff = ['tif', 'tiff', 'tff'];
-            var blockedHeic = ['heic', 'heif', 'heics', 'heifs', 'hif'];
-            
-            for (var i = 0; i < files.length; i++) {
-                var ext = files[i].name.split('.').pop().toLowerCase();
-                
-                if (blockedTiff.indexOf(ext) !== -1) {
-                    e.target.value = '';
-                    alert('❌ TIFF files (.tif, .tiff) are not allowed.\n\nPlease convert to JPG or WebP format.');
-                    return false;
                 }
-                
-                if (blockedHeic.indexOf(ext) !== -1) {
-                    e.target.value = '';
-                    alert('❌ HEIC/HEIF files are not allowed.\n\nPlease convert to JPG or WebP format.');
-                    return false;
-                }
-            }
+            });
         });
-    });
+    }
     </script>
     <?php
 });
 
 /**
- * Add admin notice for blocked uploads
- */
-add_action('admin_notices', function() {
-    // Show persistent notice on media library
-    if (isset($_GET['mode']) && $_GET['mode'] === 'grid') {
-        echo '<div class="notice notice-warning is-dismissible"><p>';
-        echo '<strong>File Type Restrictions:</strong> TIFF (.tif, .tiff) and HEIC (.heic, .heif) files are blocked. ';
-        echo 'Please use JPG, PNG, or WebP formats (recommended: max 1MB, 1920px width).';
-        echo '</p></div>';
-    }
-});
-
-/**
- * Add to admin bar
+ * Add admin bar indicator
  */
 add_action('admin_bar_menu', function($wp_admin_bar) {
     if (!current_user_can('upload_files')) {
@@ -286,29 +239,23 @@ add_action('admin_bar_menu', function($wp_admin_bar) {
         'title' => '🚫 TIFF/HEIC Blocked',
         'href' => admin_url('upload.php'),
         'meta' => [
-            'title' => 'TIFF and HEIC uploads are blocked. Click to view Media Library.'
+            'title' => 'TIFF and HEIC uploads are blocked (MU Plugin Active)'
         ]
     ]);
 }, 999);
 
 /**
- * Activation hook
- */
-register_activation_hook(__FILE__, function() {
-    update_option('oh_block_upload_activated', time());
-    
-    // Add admin notice for activation
-    set_transient('oh_block_upload_activated_notice', true, 5);
-});
-
-/**
- * Show activation notice
+ * Add admin notice on media library
  */
 add_action('admin_notices', function() {
-    if (get_transient('oh_block_upload_activated_notice')) {
-        echo '<div class="notice notice-success is-dismissible"><p>';
-        echo '<strong>OH Block Upload Activated:</strong> TIFF and HEIC file uploads are now blocked.';
+    $screen = get_current_screen();
+    if ($screen && $screen->id === 'upload') {
+        echo '<div class="notice notice-info is-dismissible"><p>';
+        echo '<strong>Upload Restrictions (MU Plugin):</strong> TIFF (.tif, .tiff) and HEIC (.heic, .heif) files are blocked. ';
+        echo 'Please use JPG, PNG, or WebP formats.';
         echo '</p></div>';
-        delete_transient('oh_block_upload_activated_notice');
     }
 });
+
+// Log that MU plugin is loaded (only if debug is enabled)
+oh_debug_log('MU Plugin loaded successfully');
