@@ -9,7 +9,7 @@
  * License:           GPL v2 or later
  * Text Domain:       oh-block-uploads
  * 
- * Filename:          oh-block-uploads.php
+ * Filename:          oh-block-tiff-heic-uploads.php
  * Location:          /wp-content/mu-plugins/
  */
 
